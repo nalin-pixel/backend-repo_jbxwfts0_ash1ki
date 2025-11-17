@@ -10,7 +10,12 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from bson import ObjectId
-from bs4 import BeautifulSoup
+
+# Optional dependency: BeautifulSoup (bs4). Guard the import so the app can start even if bs4 isn't installed
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except Exception:  # ModuleNotFoundError or parser issues
+    BeautifulSoup = None  # type: ignore
 
 from database import db, create_document, get_documents
 from schemas import User as UserSchema, InventoryItem as InventoryItemSchema, TechnicianStock as TechnicianStockSchema, WorkOrder as WorkOrderSchema
@@ -133,7 +138,15 @@ class SupplierScrapeParams(BaseModel):
 
 
 def parse_products_from_html(html: str):
-    soup = BeautifulSoup(html, 'lxml')
+    if BeautifulSoup is None:
+        # Dependency not available; caller will handle error
+        raise RuntimeError("BeautifulSoup not available")
+    # Use lxml if available, otherwise fallback to the built-in parser
+    parser = "lxml"
+    try:
+        soup = BeautifulSoup(html, parser)
+    except Exception:
+        soup = BeautifulSoup(html, "html.parser")
     items = []
     # Generic selectors; may need adjustment with real site structure
     for card in soup.select('[class*="product" i]'):  # tries to catch typical product cards
@@ -162,6 +175,8 @@ def parse_products_from_html(html: str):
 def inventory_scrape(params: SupplierScrapeParams, current_user=Depends(get_current_user)):
     if current_user.get("role") != "office":
         raise HTTPException(status_code=403, detail="Only office can sync inventory")
+    if BeautifulSoup is None:
+        raise HTTPException(status_code=503, detail="Scraper dependencies not installed on server")
     try:
         r = requests.get(params.url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code != 200:
